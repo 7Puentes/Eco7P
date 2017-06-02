@@ -1,13 +1,5 @@
-
 # coding: utf-8
 
-# # Seminar paper: Pairs trading
-
-# #### Author: Alexander Franz
-
-# In[26]:
-
-# Import important packages
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -20,56 +12,51 @@ import itertools
 import pandas_datareader.data as web
 
 import pickle
+import csv
 
-
-# In[35]:
-
-# Create a list of all ticker symbols of the DAX30 companies
+from pair import norming, pairsmatch
 
 aktien = []
 
 kurz = []
 
 
-import csv
-with open('companylist.csv', 'rb') as csvfile:
-     spamreader = csv.reader(csvfile, delimiter=',', quotechar='"')
-     c = 0
-     for row in spamreader:
-         c += 1
-         if c==1:
-             continue
-         print ', '.join(row)
-         aktien.append( row[1].strip('\n') )
-         kurz.append( row[0].strip('\n') )
 
+def load_company_list():
+    '''
+    Levanta de un CSV la lista de empresas o activos a considerar para hacer la comparativa
+    :return:
+    '''
 
-# Adds the .DE appendix to the list, needed for Yahoo Finance quotes
+    with open('companylist.csv', 'rb') as csvfile:
+         spamreader = csv.reader(csvfile, delimiter=',', quotechar='"')
+         c = 0
+         for row in spamreader:
+             c += 1
+             if c==1:
+                 continue
+             print ', '.join(row)
+             aktien.append( row[1].strip('\n') )
+             kurz.append( row[0].strip('\n') )
 
-kurzde = [] 
-for i in kurz:
-    d = i.strip() #+ ".AR"
-    print d
-    kurzde.append(d)
- 
-dax = pd.DataFrame({'company' : aktien, 'ticker' : kurz})
+    kurzde = []
+    for i in kurz:
+        d = i.strip() #+ ".AR"
+        print d
+        kurzde.append(d)
 
+    dax = pd.DataFrame({'company' : aktien, 'ticker' : kurz})
 
-# In[36]:
-
-dax
-
-
-# In[5]:
-
-# Getting the Data from Yahoo Finance, using the stocks from the "kurzde" list, as Yahoo needs the .DE appendix for German stocks.
-
-#trainStartDate = datetime(2005, 1, 1)
-#trainEndDate = datetime(2014, 12, 30)
+    return dax , kurzde
 
 def grabData( tickers, startDate, endDate ):
-
-    import pandas_datareader.data as web
+    '''
+    Busca en yahoo la data de esas empresas
+    :param tickers:
+    :param startDate:
+    :param endDate:
+    :return:
+    '''
 
     ticker = tickers[0]
     data1 = web.DataReader(ticker.strip('\n'), "yahoo", startDate, endDate )
@@ -90,211 +77,96 @@ def grabData( tickers, startDate, endDate ):
         print result.head() 
     return result   
 
-#data = grabData(tickers=kurzde, startDate=trainStartDate, endDate=trainEndDate)
 
 
-try:
-    pkl_file = open('data.pkl', 'rb')
-    data = pickle.load(pkl_file)
-except:    
-    start = datetime(2013, 1, 1, 0, 0, 0, 0, pytz.utc)
-    end = datetime(2015, 12, 31, 0, 0, 0, 0, pytz.utc)
-    data = zp.utils.factory.load_from_yahoo(stocks = kurzde, indexes={}, start=start, end=end, adjusted=True)
-    output = open('data.pkl', 'wb')
-    # Pickle dictionary using protocol 0.
-    pickle.dump(data, output)
-data.head()
+def load_or_get_data(stocks):
+    '''
+    Carga la data de los stocks desde yahoo.
+    :param stocks:
+    :return:
+    '''
+    try:
+        pkl_file = open('data.pkl', 'rb')
+        data = pickle.load(pkl_file)
+    except:
+        start = datetime(2013, 1, 1, 0, 0, 0, 0, pytz.utc)
+        end = datetime(2015, 12, 31, 0, 0, 0, 0, pytz.utc)
+        data = zp.utils.factory.load_from_yahoo(stocks = stocks, indexes={}, start=start, end=end, adjusted=True)
+        output = open('data.pkl', 'wb')
+        # Pickle dictionary using protocol 0.
+        pickle.dump(data, output)
 
+    return data
 
+dax , kurzde = load_company_list()
 
-# In[12]:
+data = load_or_get_data(kurzde)
 
-# Adds the old ticker without the .DE appendix
 data.columns = kurz
-# Remove Christmas as a non-trading day
-#data = data.drop(pd.Timestamp('2009-12-24 00:00:00'))
-# BMW had a non trading day, replacing with last close price
-# data['BMW'][pd.Timestamp("2009-03-09")] = data['BMW'][pd.Timestamp("2009-02-09")]
-
-
-
-# In[13]:
-
-data.describe()
-
-
-# In[19]:
-
-# Normalize the whole DataFrame by dividing by first observation
-# Remove 2009-12-24 and 2009-12-31, as nontrading on those days.
-def norming(x):
-    #if isinstance(x, basestring):
-    #    return x
-    return x / x[0]
-
 
 datanorm = data.apply(norming)
-print 'datanorm!!!'
-print datanorm.head()
-
-
-# In[20]:
 
 # Saving both DataFrames as .csv
 data.to_csv("dax.csv")
 datanorm.to_csv("dax_normalized.csv")
 
 
-# # Pairs formation
+def train_pairs():
+    daxnorm = pd.read_csv("dax_normalized.csv", index_col=0, parse_dates=True)
 
-# #### The second part involves finding potential trading pairs. For this, we create all possible pair combinations and compute the sum of squared distances (SSD) in normalized prices as a selection criterion. We then rank the pairs according to minimal SSD and choose our pairs!
+    daxpairs = pairsmatch(kurz,daxnorm)
 
-# In[22]:
-
-daxnorm = pd.read_csv("dax_normalized.csv", index_col=0, parse_dates=True)
-
-
-# In[23]:
-
-def combomaker(x):
-    combos = itertools.combinations(x, 2)
-    usable_pairs = []
-    for i in combos:
-        usable_pairs.append(i)
-    return usable_pairs
-    # Takes a list of ticker symbols as an input and returns a list of
-    # all possible combination without repetition
+    topfive = daxpairs[:3]
+    print 'TOPFIVE PAIRS:'
+    print topfive
 
 
+    # In[37]:
 
-# In[24]:
+    # Create a dictionary, that makes it easier to connect Ticker and Company name
+    dax_dict = dict(zip(dax.ticker, dax.company))
 
-def ssd(X,Y):
-#This function returns the sum of squared differences between two lists, in addition the
-#standard deviation of the spread between the two lists are calculated and reported.
-    spread = [] #Initialize variables
-    std = 0
-    cumdiff = 0
-    for i in range(len(X)): #Calculate and store the sum of squares
-        cumdiff += (X[i]-Y[i])**2
-        spread.append(X[i]-Y[i])
-    std = np.std(spread)  #Calculate the standard deviation
-    return cumdiff,std
+    # Get a list of the tickers of the
+    topfive['Pair']
+    fivedax = []
+    for i in topfive['Pair'].to_dict().values():
+        fivedax.append(i[0])
+        fivedax.append(i[1])
 
-
-# In[28]:
-
-def pairsmatch(x, daxnorm):
-    allpairs = combomaker(x)
-    squared = []
-    std = []
-    for i in allpairs:
-        squared.append(ssd(daxnorm[i[0]],daxnorm[i[1]])[0])
-        std.append(ssd(daxnorm[i[0]],daxnorm[i[1]])[1])
-    distancetable = pd.DataFrame({'Pair' : allpairs, 'SSD' : squared, 'Standard Deviation' : std})
-    distancetable.sort(columns=['SSD'], axis=0, ascending=True, inplace=True)
-    return distancetable
-
-daxpairs = pairsmatch(kurz,daxnorm)
+    uniquefivedax = list(set(fivedax))
 
 
-# In[40]:
+    shortde = [] # Adds the .DE appendix to the list, needed for Yahoo Finance quotes
+    for i in uniquefivedax:
+        d = i.strip() #+ ".DE"
+        shortde.append(d)
 
-# Save the Top Five Pairs in a new variable
-topfive = daxpairs[:3]
-print 'TOPFIVE PAIRS:'
-print topfive
+    return topfive
 
+def load_backtest():
+    try:
+        pkl_file = open('backtest.pkl', 'rb')
+        backtest = pickle.load(pkl_file)
+    except:
+        start = datetime(2016, 1, 1, 0, 0, 0, 0, pytz.utc)
+        end = datetime(2016, 12, 31, 0, 0, 0, 0, pytz.utc)
+        backtest = zp.utils.factory.load_from_yahoo(stocks = shortde, indexes={}, start=start, end=end, adjusted=True)
+        output = open('backtest.pkl', 'wb')
+        # Pickle dictionary using protocol 0.
+        pickle.dump(backtest, output)
 
-# In[37]:
-
-# Create a dictionary, that makes it easier to connect Ticker and Company name
-dax_dict = dict(zip(dax.ticker, dax.company))
-dax_dict
-
-
-# In[41]:
-
-# Get a list of the tickers of the 
-topfive['Pair']
-fivedax = []
-for i in topfive['Pair'].to_dict().values():
-    fivedax.append(i[0])
-    fivedax.append(i[1])
-    
-uniquefivedax = list(set(fivedax))
-uniquefivedax
+    return backtest
 
 
-# ## Getting data for the backtest
+backtest = load_backtest()
 
-# In[44]:
-
-shortde = [] # Adds the .DE appendix to the list, needed for Yahoo Finance quotes
-for i in uniquefivedax:
-    d = i.strip() #+ ".DE"
-    shortde.append(d)
-
-#start = datetime(2016, 1, 1, 0, 0, 0, 0, pytz.utc)
-#end = datetime(2016, 6, 30, 0, 0, 0, 0, pytz.utc)
-#backtest = zp.utils.factory.load_from_yahoo(stocks = shortde, indexes={}, start=start, end=end, adjusted=True)
-
-try:
-    pkl_file = open('backtest.pkl', 'rb')
-    backtest = pickle.load(pkl_file)
-except:    
-    start = datetime(2016, 1, 1, 0, 0, 0, 0, pytz.utc)
-    end = datetime(2016, 12, 31, 0, 0, 0, 0, pytz.utc)
-    backtest = zp.utils.factory.load_from_yahoo(stocks = shortde, indexes={}, start=start, end=end, adjusted=True)
-    output = open('backtest.pkl', 'wb')
-    # Pickle dictionary using protocol 0.
-    pickle.dump(backtest, output)
-data.head()
-
-#backtestStartDate = datetime(2016, 1, 1)
-#backtestEndDate = datetime(2016, 6, 30)
-#shortde = sorted(shortde)
-#print 'shortde = ',shortde
-#backtest = grabData(tickers=shortde, startDate=backtestStartDate, endDate=backtestEndDate)
-
-backtest.head()
-
-
-# In[45]:
-
-backtest.describe()
-
-
-# In[47]:
-
-# Remove the .DE appendix in the columnnames
-#colnamesfive = []
-#for i in backtest.columns:
-#    colnamesfive.append(i[:-3])
-#colnamesfive
-#backtest.columns = colnamesfive
-#backtest.head()
-
-
-# In[48]:
-
-# Saving as a csv
 backtest.to_csv("dax_backtest.csv")
 
-
-# In[49]:
-
 backtest = pd.read_csv("dax_backtest.csv", index_col=0, parse_dates=True)#, names=colnamesfive)
-backtest.head()
-
-
-# In[50]:
 
 backtestnorm = backtest.apply(norming)
-print 'BACKTEST!!!!!'
-print backtestnorm.head()
 
-# In[51]:
+topfive = train_pairs()
 
 # Create a dictionary for each pair with its corresponding standard deviation
 fivepair = []
@@ -307,7 +179,6 @@ for i in topfive['Standard Deviation']:
     fivesd.append(i)
 
 fivedic = dict(zip(fivepair, fivesd))
-fivedic
 
 
 # # The Backtesting Function
@@ -509,7 +380,7 @@ def portfolio():
                             'Total invested': invested, 'Relative return': relreturn, 'Forced close' : forced[:len(profits)]})
     avreturn = np.mean(relreturn)
     return  summary, avreturn
-   
+
 table = portfolio()[0]    
 print table
 
